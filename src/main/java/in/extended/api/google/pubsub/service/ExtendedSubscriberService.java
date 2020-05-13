@@ -22,8 +22,34 @@ import com.google.pubsub.v1.PubsubMessage;
 import in.extended.api.google.pubsub.core.ExtendedApiService;
 import in.extended.api.google.pubsub.core.ExtendedCredentialProvider;
 import in.extended.api.google.pubsub.providers.FixedCredentialsProvider;
+import in.extended.api.google.pubsub.providers.JwtCredentialsProvider;
 
 /**
+ * A wrapper for Google Cloud Pub/Sub {@code Subscriber}.<br>
+ * <br>
+ * 
+ * {@link ExtendedSubscriber} inhibits builder pattern for custom object
+ * construct.<br>
+ * <br>
+ * Set certain object parameters to build subscriber object.<br>
+ * <br>
+ * <code>
+ * 	{@link ExtendedApiService} extendedSubscriber = ExtendedSubscribeService.newBuilder("project_id", "subsscription_id")
+					  <pre>.setAuthProvider(<{@link ExtendedCredentialProvider}> provider)</pre>
+					  <pre>.setExecutors(2)</pre>
+					  <pre>.setFlowControlOutstandingCount(1000L)</pre>
+					  <pre>.setPause(500)</pre>
+					  <pre>.build();</pre>
+ * </code><br>
+ * <br>
+ * {@code extendedSubscriber.start();} <br>
+ * <br>
+ * 
+ * <b>NOTE:</b> Executor count more than the {@link Thread}s count assigned to
+ * jvm may lead to unexpected behavior. <br>
+ * <br>
+ * see also Authentication Provider : {@link ExtendedCredentialProvider}
+ * 
  * @author ashish chaturvedi
  *
  */
@@ -135,7 +161,7 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 	}
 
 	/**
-	 * @return the pause
+	 * @return the delayed time
 	 */
 	public long getPause() {
 		return pause;
@@ -173,7 +199,7 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		 * @param flowControlOutstandingCount the count to control message lease for a
 		 *                                    subscriber i.e number of message that a
 		 *                                    subscriber takes under lease to process.
-		 * @return {@link Builder(FlowControlSettings)}
+		 * @return Builder(FlowControlSettings)
 		 */
 		public Builder setFlowControlOutstandingCount(long flowControlOutstandingCount) {
 			this.flowControlOutstandingCount = Preconditions.checkNotNull(flowControlOutstandingCount);
@@ -184,7 +210,7 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		 * @param executors the executors({@link Thread}) count to set. If not set,
 		 *                  default will be the number of processors assigned to JVM.
 		 * 
-		 * @return {@link Builder(Executors)}
+		 * @return Builder(Executors)
 		 */
 		public Builder setExecutors(int executors) {
 			this.executors = Preconditions.checkNotNull(executors);
@@ -197,7 +223,7 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		 * {@link FixedCredentialsProvider}
 		 * 
 		 * @param providerType
-		 * @return
+		 * @return Builder(authProvider)
 		 */
 		public Builder setAuthProvider(ExtendedCredentialProvider providerType) {
 			this.providerType = providerType;
@@ -206,7 +232,7 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 
 		/**
 		 * @param pause
-		 * @return
+		 * @return Builder(delay)
 		 */
 		public Builder setPause(long pause) {
 			this.pause = Preconditions.checkNotNull(pause);
@@ -231,13 +257,16 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 					e.printStackTrace();
 				}
 				consumer.ack();
-
 			}
 		}).setCredentialsProvider(this.credProvider).setExecutorProvider(this.executorProvider)
 				.setFlowControlSettings(getFlowControllerSettings()).build();
 		this.subscriber = subscriber;
 	}
-
+	/**
+	 * 
+	 * @param flowcontrolElementCount
+	 * @return {@link FlowControlSettings}
+	 */
 	public FlowControlSettings buildFlowController(long flowcontrolElementCount) {
 		final FlowControlSettings fcSettings = FlowControlSettings.newBuilder()
 				.setMaxOutstandingElementCount(flowcontrolElementCount).setMaxOutstandingRequestBytes(1_000_000_000L)
