@@ -6,7 +6,9 @@ package in.extended.api.google.pubsub.service;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
+
 import org.apache.log4j.Logger;
+
 import com.google.api.client.util.Preconditions;
 import com.google.api.gax.batching.FlowControlSettings;
 import com.google.api.gax.core.CredentialsProvider;
@@ -19,6 +21,7 @@ import com.google.cloud.pubsub.v1.MessageReceiver;
 import com.google.cloud.pubsub.v1.Subscriber;
 import com.google.pubsub.v1.ProjectSubscriptionName;
 import com.google.pubsub.v1.PubsubMessage;
+
 import in.extended.api.google.pubsub.core.ExtendedApiService;
 import in.extended.api.google.pubsub.core.ExtendedCredentialProvider;
 import in.extended.api.google.pubsub.providers.FixedCredentialsProvider;
@@ -61,14 +64,12 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 	private FlowControlSettings flowControllerSettings = null;
 	private ExtendedCredentialProvider providerType = null;
 	private final ProjectSubscriptionName subscriptionName;
-	private long flowControlOutstandingCount;
 	private Subscriber subscriber = null;
 	private int executors;
 	private long pause;
 
 	private ExtendedSubscriberService(Builder builder) {
 		this.subscriptionName = builder.subscriptionName;
-		this.flowControlOutstandingCount = builder.flowControlOutstandingCount;
 		this.pause = builder.pause;
 		this.executors = builder.executors == 0 ? Runtime.getRuntime().availableProcessors() : builder.executors;
 		logger.info("Setting build executors(thread) to -- " + this.executors);
@@ -77,18 +78,22 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 				.build();
 		if (builder.providerType != null) {
 			this.providerType = builder.providerType;
-			this.credProvider = this.providerType.getClass() == FixedCredentialsProvider.class ? getFixedCreds()
-					: getJwtCreds();
+			this.credProvider = this.providerType.getClass() == FixedCredentialsProvider.class
+					? getFixedAuthenticationCredentials()
+					: getJwtAuthenticationCredential();
 		}
-		this.flowControlOutstandingCount = builder.flowControlOutstandingCount == 0 ? 0L
-				: builder.flowControlOutstandingCount;
-		this.flowControllerSettings = buildFlowController(this.flowControlOutstandingCount);
-		if (this.subscriber == null)
-			buildSubscriber();
+		if (this.subscriber == null) {
+			if (builder.flowControllerSettings == null)
+				buildSubscriber();
+			else {
+				this.flowControllerSettings = builder.flowControllerSettings;
+				buildSubscriberWithFlowController();
+			}
+		}
 	}
 
 	// get JWT access credentials.
-	private CredentialsProvider getJwtCreds() {
+	private CredentialsProvider getJwtAuthenticationCredential() {
 		ServiceAccountJwtAccessCredentials serviceAccountJwtAccessCreds = null;
 		try {
 			serviceAccountJwtAccessCreds = ServiceAccountJwtAccessCredentials.fromPkcs8(
@@ -104,11 +109,12 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 	}
 
 	// get fixed authentication credentials.
-	private CredentialsProvider getFixedCreds() {
+	private CredentialsProvider getFixedAuthenticationCredentials() {
 		CredentialsProvider credentialsProvider = null;
 		try {
-			credentialsProvider = com.google.api.gax.core.FixedCredentialsProvider.create(ServiceAccountCredentials
-					.fromStream(new FileInputStream((String) this.providerType.getCredentialsData().get("filePath"))));
+			credentialsProvider = com.google.api.gax.core.FixedCredentialsProvider
+					.create(ServiceAccountCredentials.fromStream(new FileInputStream(Preconditions
+							.checkNotNull((String) this.providerType.getCredentialsData().get("filePath")))));
 		} catch (IOException e) {
 			logger.error("Unable to process input credential file" + e);
 		}
@@ -140,13 +146,6 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 	}
 
 	/**
-	 * @return the flowControlOutstandingCount
-	 */
-	public long getFlowControlOutstandingCount() {
-		return flowControlOutstandingCount;
-	}
-
-	/**
 	 * @return the executors
 	 */
 	public int getExecutors() {
@@ -170,7 +169,6 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 	/**
 	 * Build and start {@code subscriber} with builder parameters.
 	 */
-
 	@Override
 	public String toString() {
 		return "ExtendedSubscriber [credProvider=" + credProvider + ", executorProvider=" + executorProvider
@@ -187,6 +185,7 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		private String projectId;
 		private ExtendedCredentialProvider providerType;
 		private long pause;
+		private FlowControlSettings flowControllerSettings = null;
 
 		public Builder(String projectId, String subscriptionName) {
 			this.projectId = projectId;
@@ -202,7 +201,10 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		 * @return Builder(FlowControlSettings)
 		 */
 		public Builder setFlowControlOutstandingCount(long flowControlOutstandingCount) {
-			this.flowControlOutstandingCount = Preconditions.checkNotNull(flowControlOutstandingCount);
+			if (flowControlOutstandingCount > 0) {
+				this.flowControlOutstandingCount = flowControlOutstandingCount;
+				this.flowControllerSettings = buildFlowController(this.flowControlOutstandingCount);
+			}
 			return this;
 		}
 
@@ -222,16 +224,16 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		 * {@link JwtCredentialsProvider}<br>
 		 * {@link FixedCredentialsProvider}
 		 * 
-		 * @param providerType
+		 * @param providerType {@code FixedCredentialsProvider OR JwtCredentialsProvider}
 		 * @return Builder(authProvider)
 		 */
 		public Builder setAuthProvider(ExtendedCredentialProvider providerType) {
-			this.providerType = providerType;
+			this.providerType = Preconditions.checkNotNull(providerType);
 			return this;
 		}
 
 		/**
-		 * @param pause
+		 * @param pause delay to set between consecutive messages.
 		 * @return Builder(delay)
 		 */
 		public Builder setPause(long pause) {
@@ -242,10 +244,23 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		public ExtendedSubscriberService build() {
 			return new ExtendedSubscriberService(this);
 		}
+
+		/**
+		 * 
+		 * @param flowcontrolElementCount
+		 * @return {@link FlowControlSettings}
+		 */
+		public FlowControlSettings buildFlowController(long flowcontrolElementCount) {
+			return FlowControlSettings.newBuilder().setMaxOutstandingElementCount(flowcontrolElementCount)
+					.setMaxOutstandingRequestBytes(1_000_000_000L).build();
+		}
 	}
 
-	public void buildSubscriber() {
-		logger.info("Building subscriber...");
+	/**
+	 * Build subscriber with flow control settings.
+	 */
+	public void buildSubscriberWithFlowController() {
+		logger.info("Building subscriber with flow controller settings...");
 		final Subscriber subscriber = Subscriber.newBuilder(this.subscriptionName, new MessageReceiver() {
 
 			@Override
@@ -262,16 +277,26 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 				.setFlowControlSettings(getFlowControllerSettings()).build();
 		this.subscriber = subscriber;
 	}
+
 	/**
-	 * 
-	 * @param flowcontrolElementCount
-	 * @return {@link FlowControlSettings}
+	 * Build subscriber with provided parameters.
 	 */
-	public FlowControlSettings buildFlowController(long flowcontrolElementCount) {
-		final FlowControlSettings fcSettings = FlowControlSettings.newBuilder()
-				.setMaxOutstandingElementCount(flowcontrolElementCount).setMaxOutstandingRequestBytes(1_000_000_000L)
-				.build();
-		return fcSettings;
+	public void buildSubscriber() {
+		logger.info("Building subscriber...");
+		final Subscriber subscriber = Subscriber.newBuilder(this.subscriptionName, new MessageReceiver() {
+
+			@Override
+			public void receiveMessage(PubsubMessage message, AckReplyConsumer consumer) {
+				logger.info("Message : " + message.getData().toStringUtf8());
+				try {
+					TimeUnit.MILLISECONDS.sleep(getPause());
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+				consumer.ack();
+			}
+		}).setCredentialsProvider(this.credProvider).setExecutorProvider(this.executorProvider).build();
+		this.subscriber = subscriber;
 	}
 
 	@Override
@@ -279,11 +304,12 @@ public class ExtendedSubscriberService implements ExtendedApiService {
 		try {
 			this.subscriber = getSubscriber();
 			this.subscriber.startAsync().awaitRunning();
-			this.subscriber.awaitTerminated();
 		} catch (NullPointerException npe) {
 			logger.error("Null subscriber found in startConsumer");
 		} catch (IllegalStateException ise) {
 			logger.error("Cannot start subscriber " + ise);
+		} finally {
+			this.subscriber.awaitTerminated();
 		}
 	}
 }
